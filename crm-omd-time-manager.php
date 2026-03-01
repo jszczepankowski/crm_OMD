@@ -272,21 +272,6 @@ class CRM_OMD_Time_Manager
         return (float) $sum;
     }
 
-    private function get_user_revenue_for_range(int $user_id, string $date_from, string $date_to): float
-    {
-        global $wpdb;
-        $sum = $wpdb->get_var(
-            $wpdb->prepare(
-                "SELECT COALESCE(SUM(calculated_value), 0) FROM {$this->tbl_entries} WHERE user_id = %d AND work_date BETWEEN %s AND %s",
-                $user_id,
-                $date_from,
-                $date_to
-            )
-        );
-
-        return (float) $sum;
-    }
-
     public function render_employee_monthly_view_shortcode($atts = [], $content = null, string $shortcode_tag = ''): string
     {
         if (!is_user_logged_in()) {
