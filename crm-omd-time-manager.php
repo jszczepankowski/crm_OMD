@@ -181,10 +181,14 @@ class CRM_OMD_Time_Manager
         return home_url('/panel-pracownika/');
     }
 
-    public function render_employee_login_shortcode(array $atts = []): string
+    public function render_employee_login_shortcode($atts = [], $content = null, string $shortcode_tag = ''): string
     {
         if (is_user_logged_in()) {
             return '<p>Jesteś już zalogowany.</p>';
+        }
+
+        if (!is_array($atts)) {
+            $atts = [];
         }
 
         $atts = shortcode_atts([
@@ -268,7 +272,7 @@ class CRM_OMD_Time_Manager
         return (float) $sum;
     }
 
-    public function render_employee_monthly_view_shortcode(array $atts = []): string
+    public function render_employee_monthly_view_shortcode($atts = [], $content = null, string $shortcode_tag = ''): string
     {
         if (!is_user_logged_in()) {
             return '<p>Musisz być zalogowany.</p>';
@@ -277,6 +281,10 @@ class CRM_OMD_Time_Manager
         $allow = get_user_meta(get_current_user_id(), 'crm_omd_worker_enabled', true);
         if ($allow === '0') {
             return '<p>Twoje konto jest wyłączone z raportowania czasu pracy.</p>';
+        }
+
+        if (!is_array($atts)) {
+            $atts = [];
         }
 
         $atts = shortcode_atts([
@@ -357,7 +365,7 @@ class CRM_OMD_Time_Manager
         return (string) ob_get_clean();
     }
 
-    public function render_employee_portal_shortcode($atts = []): string
+    public function render_employee_portal_shortcode($atts = [], $content = null, string $shortcode_tag = ''): string
     {
         if (!is_user_logged_in()) {
             return '<p>Musisz być zalogowany.</p>';
@@ -402,7 +410,7 @@ class CRM_OMD_Time_Manager
         return (string) ob_get_clean();
     }
 
-    public function render_tracker_shortcode(): string
+    public function render_tracker_shortcode($atts = [], $content = null, string $shortcode_tag = ''): string
     {
         if (!is_user_logged_in()) {
             return '<p>Musisz być zalogowany.</p>';
