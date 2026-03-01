@@ -181,10 +181,14 @@ class CRM_OMD_Time_Manager
         return home_url('/panel-pracownika/');
     }
 
-    public function render_employee_login_shortcode(array $atts = []): string
+    public function render_employee_login_shortcode($atts = [], $content = null, string $shortcode_tag = ''): string
     {
         if (is_user_logged_in()) {
             return '<p>Jesteś już zalogowany.</p>';
+        }
+
+        if (!is_array($atts)) {
+            $atts = [];
         }
 
         $atts = shortcode_atts([
@@ -268,7 +272,27 @@ class CRM_OMD_Time_Manager
         return (float) $sum;
     }
 
-    public function render_employee_monthly_view_shortcode(array $atts = []): string
+    /**
+     * Backward-compatible helper kept to avoid fatals on environments
+     * that still execute older workers-page code paths.
+     */
+    private function get_user_revenue_for_range(int $user_id, string $date_from, string $date_to): float
+    {
+        global $wpdb;
+        $sum = $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COALESCE(SUM(calculated_value), 0) FROM {$this->tbl_entries} WHERE user_id = %d AND work_date BETWEEN %s AND %s",
+                $user_id,
+                $date_from,
+                $date_to
+            )
+        );
+
+        return (float) $sum;
+    }
+
+
+    public function render_employee_monthly_view_shortcode($atts = [], $content = null, string $shortcode_tag = ''): string
     {
         if (!is_user_logged_in()) {
             return '<p>Musisz być zalogowany.</p>';
@@ -277,6 +301,10 @@ class CRM_OMD_Time_Manager
         $allow = get_user_meta(get_current_user_id(), 'crm_omd_worker_enabled', true);
         if ($allow === '0') {
             return '<p>Twoje konto jest wyłączone z raportowania czasu pracy.</p>';
+        }
+
+        if (!is_array($atts)) {
+            $atts = [];
         }
 
         $atts = shortcode_atts([
@@ -357,7 +385,7 @@ class CRM_OMD_Time_Manager
         return (string) ob_get_clean();
     }
 
-    public function render_employee_portal_shortcode($atts = []): string
+    public function render_employee_portal_shortcode($atts = [], $content = null, string $shortcode_tag = ''): string
     {
         if (!is_user_logged_in()) {
             return '<p>Musisz być zalogowany.</p>';
@@ -402,7 +430,7 @@ class CRM_OMD_Time_Manager
         return (string) ob_get_clean();
     }
 
-    public function render_tracker_shortcode(): string
+    public function render_tracker_shortcode($atts = [], $content = null, string $shortcode_tag = ''): string
     {
         if (!is_user_logged_in()) {
             return '<p>Musisz być zalogowany.</p>';
@@ -1169,12 +1197,13 @@ class CRM_OMD_Time_Manager
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field('crm_omd_save_worker_settings');
         echo '<input type="hidden" name="action" value="crm_omd_save_worker_settings">';
-        echo '<table class="widefat striped"><thead><tr><th>Użytkownik</th><th>Email</th><th>Rola</th><th>Ostatnie logowanie</th><th>Aktywny w time tracking</th><th>Przypomnienia mailowe</th><th>Akcje</th></tr></thead><tbody>';
+        echo '<table class="widefat striped"><thead><tr><th>Użytkownik</th><th>Email</th><th>Rola</th><th>Ostatnie logowanie</th><th>Aktywny w time tracking</th><th>Przypomnienia mailowe</th><th>Pensja miesięczna (PLN)</th><th>Akcje</th></tr></thead><tbody>';
 
         foreach ($users as $user) {
             $enabled = get_user_meta($user->ID, 'crm_omd_worker_enabled', true);
             $reminder = get_user_meta($user->ID, 'crm_omd_worker_reminder', true);
             $last_login = get_user_meta($user->ID, 'crm_omd_last_login', true);
+            $monthly_salary = (float) get_user_meta($user->ID, 'crm_omd_worker_monthly_salary', true);
             if ($enabled === '') {
                 $enabled = '1';
             }
@@ -1189,6 +1218,7 @@ class CRM_OMD_Time_Manager
             echo '<td>' . esc_html($last_login ? $last_login : 'brak') . '</td>';
             echo '<td><label><input type="checkbox" name="worker_enabled[' . (int) $user->ID . ']" value="1" ' . checked($enabled, '1', false) . '> Tak</label></td>';
             echo '<td><label><input type="checkbox" name="worker_reminder[' . (int) $user->ID . ']" value="1" ' . checked($reminder, '1', false) . '> Tak</label></td>';
+            echo '<td><input type="number" name="worker_monthly_salary[' . (int) $user->ID . ']" min="0" step="0.01" value="' . esc_attr(number_format($monthly_salary, 2, '.', '')) . '" style="width:140px;"></td>';
             echo '<td><a class="button button-small" href="' . esc_url(add_query_arg(['page' => 'crm-omd-workers', 'edit_worker' => (int) $user->ID], admin_url('admin.php'))) . '">Edytuj konto</a></td>';
             echo '</tr>';
         }
@@ -1203,7 +1233,7 @@ class CRM_OMD_Time_Manager
         $admin_month_num = (int) substr($admin_month, 5, 2);
         $admin_expected_hours = $this->get_working_days_in_month($admin_year, $admin_month_num) * 8;
 
-        echo '<h2>Podsumowanie godzin pracowników</h2>';
+        echo '<h2>Podsumowanie pracowników</h2>';
         echo '<form method="get" style="margin:10px 0 8px;">';
         echo '<input type="hidden" name="page" value="crm-omd-workers">';
         echo '<label>Miesiąc: <input type="month" name="worker_month" value="' . esc_attr($admin_month) . '"></label> ';
@@ -1211,14 +1241,28 @@ class CRM_OMD_Time_Manager
         echo '</form>';
 
         echo '<table class="widefat striped" style="margin-top:8px;">';
-        echo '<thead><tr><th>Pracownik</th><th>Zaraportowane godziny</th><th>Godziny do przepracowania</th><th>Różnica</th></tr></thead><tbody>';
+        echo '<thead><tr><th>Pracownik</th><th>Zaraportowane godziny</th><th>Godziny do przepracowania</th><th>Różnica godzin</th><th>Wypracowany zysk (PLN)</th><th>Koszt etatu / pensja (PLN)</th><th>Stopa zwrotu (zysk - pensja)</th></tr></thead><tbody>';
+        global $wpdb;
         foreach ($users as $user) {
             $reported = $this->get_user_reported_hours_for_range((int) $user->ID, $admin_date_from, $admin_date_to);
+            $revenue = (float) $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT COALESCE(SUM(calculated_value), 0) FROM {$this->tbl_entries} WHERE user_id = %d AND work_date BETWEEN %s AND %s",
+                    (int) $user->ID,
+                    $admin_date_from,
+                    $admin_date_to
+                )
+            );
+            $salary = (float) get_user_meta($user->ID, 'crm_omd_worker_monthly_salary', true);
+            $return = $revenue - $salary;
             echo '<tr>';
             echo '<td>' . esc_html($user->display_name) . '</td>';
             echo '<td>' . esc_html(number_format($reported, 2, ',', ' ')) . '</td>';
             echo '<td>' . esc_html((string) $admin_expected_hours) . '</td>';
             echo '<td>' . esc_html(number_format($reported - (float) $admin_expected_hours, 2, ',', ' ')) . '</td>';
+            echo '<td>' . esc_html(number_format($revenue, 2, ',', ' ')) . '</td>';
+            echo '<td>' . esc_html(number_format($salary, 2, ',', ' ')) . '</td>';
+            echo '<td>' . esc_html(number_format($return, 2, ',', ' ')) . '</td>';
             echo '</tr>';
         }
         echo '</tbody></table>';
@@ -1233,12 +1277,16 @@ class CRM_OMD_Time_Manager
         $users = get_users(['fields' => 'ID']);
         $enabled = isset($_POST['worker_enabled']) && is_array($_POST['worker_enabled']) ? $_POST['worker_enabled'] : [];
         $reminder = isset($_POST['worker_reminder']) && is_array($_POST['worker_reminder']) ? $_POST['worker_reminder'] : [];
+        $monthly_salary = isset($_POST['worker_monthly_salary']) && is_array($_POST['worker_monthly_salary']) ? $_POST['worker_monthly_salary'] : [];
 
         foreach ($users as $id) {
             $is_enabled = isset($enabled[$id]) ? '1' : '0';
             $is_reminder = isset($reminder[$id]) ? '1' : '0';
+            $salary_raw = isset($monthly_salary[$id]) ? (string) wp_unslash($monthly_salary[$id]) : '0';
+            $salary = max(0, (float) str_replace(',', '.', $salary_raw));
             update_user_meta($id, 'crm_omd_worker_enabled', $is_enabled);
             update_user_meta($id, 'crm_omd_worker_reminder', $is_reminder);
+            update_user_meta($id, 'crm_omd_worker_monthly_salary', $salary);
         }
 
         wp_safe_redirect(admin_url('admin.php?page=crm-omd-workers'));
