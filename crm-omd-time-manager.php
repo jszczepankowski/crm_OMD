@@ -41,7 +41,6 @@ class CRM_OMD_Time_Manager
         add_action('admin_post_crm_omd_review_entry', [$this, 'handle_review_entry']);
         add_action('admin_post_crm_omd_save_entry_admin', [$this, 'handle_save_entry_admin']);
         add_action('admin_post_crm_omd_delete_entry', [$this, 'handle_delete_entry']);
-        add_action('admin_post_crm_omd_duplicate_fixed_entry', [$this, 'handle_duplicate_fixed_entry']);
 
         add_action('admin_post_crm_omd_export_report', [$this, 'handle_export_report']);
         add_action('admin_post_crm_omd_save_worker_settings', [$this, 'handle_save_worker_settings']);
@@ -51,7 +50,6 @@ class CRM_OMD_Time_Manager
 
         add_shortcode('crm_omd_time_tracker', [$this, 'render_tracker_shortcode']);
         add_shortcode('crm_omd_employee_login', [$this, 'render_employee_login_shortcode']);
-        add_shortcode('crm_omd_employee_monthly_view', [$this, 'render_employee_monthly_view_shortcode']);
         add_action('admin_post_crm_omd_submit_entry', [$this, 'handle_submit_entry']);
 
         add_action('crm_omd_daily_reminder', [$this, 'send_daily_reminders']);
@@ -206,94 +204,6 @@ class CRM_OMD_Time_Manager
         add_submenu_page('crm-omd-time', 'Usługi', 'Usługi', 'manage_options', 'crm-omd-services', [$this, 'render_services_page']);
         add_submenu_page('crm-omd-time', 'Pracownicy', 'Pracownicy', 'manage_options', 'crm-omd-workers', [$this, 'render_workers_page']);
         add_submenu_page('crm-omd-time', 'Raporty', 'Raporty', 'manage_options', 'crm-omd-reports', [$this, 'render_reports_page']);
-    }
-
-    private function get_working_days_in_month(int $year, int $month): int
-    {
-        $days_in_month = (int) cal_days_in_month(CAL_GREGORIAN, $month, $year);
-        $working_days = 0;
-
-        for ($day = 1; $day <= $days_in_month; $day++) {
-            $timestamp = strtotime(sprintf('%04d-%02d-%02d', $year, $month, $day));
-            $weekday = (int) date('N', $timestamp);
-            if ($weekday <= 5) {
-                $working_days++;
-            }
-        }
-
-        return $working_days;
-    }
-
-    public function render_employee_monthly_view_shortcode(array $atts = []): string
-    {
-        if (!is_user_logged_in()) {
-            return '<p>Musisz być zalogowany.</p>';
-        }
-
-        $allow = get_user_meta(get_current_user_id(), 'crm_omd_worker_enabled', true);
-        if ($allow === '0') {
-            return '<p>Twoje konto jest wyłączone z raportowania czasu pracy.</p>';
-        }
-
-        $atts = shortcode_atts([
-            'month' => date('Y-m'),
-        ], $atts, 'crm_omd_employee_monthly_view');
-
-        $month = preg_match('/^\d{4}-\d{2}$/', (string) $atts['month']) ? (string) $atts['month'] : date('Y-m');
-        $year = (int) substr($month, 0, 4);
-        $month_num = (int) substr($month, 5, 2);
-
-        global $wpdb;
-        $user_id = get_current_user_id();
-        $rows = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT e.work_date, c.name AS client_name, p.name AS project_name, s.name AS service_name, e.hours, e.status, e.description
-                FROM {$this->tbl_entries} e
-                INNER JOIN {$this->tbl_clients} c ON c.id = e.client_id
-                INNER JOIN {$this->tbl_projects} p ON p.id = e.project_id
-                INNER JOIN {$this->tbl_services} s ON s.id = e.service_id
-                WHERE e.user_id = %d AND DATE_FORMAT(e.work_date, '%%Y-%%m') = %s
-                ORDER BY e.work_date DESC, e.id DESC",
-                $user_id,
-                $month
-            )
-        );
-
-        $reported_hours = 0.0;
-        foreach ($rows as $row) {
-            $reported_hours += (float) $row->hours;
-        }
-
-        $working_days = $this->get_working_days_in_month($year, $month_num);
-        $expected_hours = $working_days * 8;
-
-        ob_start();
-        echo '<div class="crm-omd-employee-monthly-view">';
-        echo '<h3>Moje godziny - ' . esc_html($month) . '</h3>';
-        echo '<p><strong>Zaraportowane godziny:</strong> ' . esc_html(number_format($reported_hours, 2, ',', ' ')) . '</p>';
-        echo '<p><strong>Godziny do przepracowania (8h x dni robocze):</strong> ' . esc_html((string) $expected_hours) . '</p>';
-
-        echo '<table class="widefat striped">';
-        echo '<thead><tr><th>Data</th><th>Klient</th><th>Projekt</th><th>Usługa</th><th>Godziny</th><th>Status</th><th>Opis</th></tr></thead><tbody>';
-        if (empty($rows)) {
-            echo '<tr><td colspan="7">Brak wpisów dla tego miesiąca.</td></tr>';
-        } else {
-            foreach ($rows as $row) {
-                echo '<tr>';
-                echo '<td>' . esc_html($row->work_date) . '</td>';
-                echo '<td>' . esc_html($row->client_name) . '</td>';
-                echo '<td>' . esc_html($row->project_name) . '</td>';
-                echo '<td>' . esc_html($row->service_name) . '</td>';
-                echo '<td>' . esc_html(number_format((float) $row->hours, 2, ',', ' ')) . '</td>';
-                echo '<td>' . esc_html($row->status) . '</td>';
-                echo '<td>' . esc_html($row->description) . '</td>';
-                echo '</tr>';
-            }
-        }
-        echo '</tbody></table>';
-        echo '</div>';
-
-        return (string) ob_get_clean();
     }
 
     public function render_tracker_shortcode(): string
@@ -469,7 +379,7 @@ class CRM_OMD_Time_Manager
             $params[] = $client_id;
         }
 
-        $sql = "SELECT e.id, e.user_id, e.client_id, e.project_id, e.service_id, e.work_date, e.hours, e.description, e.status, e.calculated_value, c.name AS client_name, p.name AS project_name, s.name AS service_name, s.billing_type, u.display_name
+        $sql = "SELECT e.id, e.user_id, e.client_id, e.project_id, e.service_id, e.work_date, e.hours, e.description, e.status, e.calculated_value, c.name AS client_name, p.name AS project_name, s.name AS service_name, u.display_name
             FROM {$this->tbl_entries} e
             INNER JOIN {$this->tbl_clients} c ON c.id = e.client_id
             INNER JOIN {$this->tbl_projects} p ON p.id = e.project_id
@@ -492,60 +402,6 @@ class CRM_OMD_Time_Manager
         }
 
         echo '<div class="wrap"><h1>Wpisy godzinowe</h1>';
-
-        $create_defaults = (object) [
-            'id' => 0,
-            'user_id' => get_current_user_id(),
-            'client_id' => 0,
-            'project_id' => 0,
-            'service_id' => 0,
-            'work_date' => date('Y-m-d'),
-            'hours' => 1,
-            'status' => 'approved',
-            'description' => '',
-        ];
-
-        if (!$edit_entry) {
-            echo '<h2>Dodaj wpis jako administrator</h2>';
-            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="background:#fff;padding:12px;border:1px solid #ddd;margin-bottom:15px;">';
-            wp_nonce_field('crm_omd_save_entry_admin_0');
-            echo '<input type="hidden" name="action" value="crm_omd_save_entry_admin">';
-            echo '<input type="hidden" name="id" value="0">';
-
-            echo '<p><label>Pracownik<br><select name="user_id" required>';
-            foreach ($users as $user) {
-                echo '<option value="' . (int) $user->ID . '"' . selected((int) $create_defaults->user_id, (int) $user->ID, false) . '>' . esc_html($user->display_name) . '</option>';
-            }
-            echo '</select></label></p>';
-
-            echo '<p><label>Klient<br><select name="client_id" required>';
-            echo '<option value="">Wybierz klienta</option>';
-            foreach ($clients as $client) {
-                echo '<option value="' . (int) $client->id . '">' . esc_html($client->name) . '</option>';
-            }
-            echo '</select></label></p>';
-
-            echo '<p><label>Projekt<br><select name="project_id" required>';
-            echo '<option value="">Wybierz projekt</option>';
-            foreach ($projects as $project) {
-                echo '<option value="' . (int) $project->id . '">' . esc_html($project->name) . '</option>';
-            }
-            echo '</select></label></p>';
-
-            echo '<p><label>Usługa<br><select name="service_id" required>';
-            echo '<option value="">Wybierz usługę</option>';
-            foreach ($services as $service) {
-                echo '<option value="' . (int) $service->id . '">' . esc_html($service->name) . '</option>';
-            }
-            echo '</select></label></p>';
-
-            echo '<p><label>Data pracy<br><input type="date" name="work_date" value="' . esc_attr($create_defaults->work_date) . '" required></label></p>';
-            echo '<p><label>Godziny<br><input type="number" name="hours" min="0" step="0.25" value="' . esc_attr((string) $create_defaults->hours) . '" required></label></p>';
-            echo '<p><label>Status<br><select name="status"><option value="pending">pending</option><option value="approved" selected>approved</option><option value="rejected">rejected</option></select></label></p>';
-            echo '<p><label>Opis<br><textarea name="description" rows="4" required></textarea></label></p>';
-            echo '<p><button class="button button-primary" type="submit">Dodaj wpis</button></p>';
-            echo '</form>';
-        }
 
         if ($edit_entry) {
             echo '<h2>Edycja wpisu #' . (int) $edit_entry->id . '</h2>';
@@ -633,9 +489,6 @@ class CRM_OMD_Time_Manager
                 echo '<a class="button button-secondary" href="' . esc_url(wp_nonce_url(admin_url('admin-post.php?action=crm_omd_review_entry&id=' . (int) $row->id . '&decision=rejected'), 'crm_omd_review_entry_' . (int) $row->id)) . '">Odrzuć</a> ';
             }
             echo '<a class="button" href="' . esc_url(add_query_arg(['page' => 'crm-omd-time', 'edit_entry' => (int) $row->id], admin_url('admin.php'))) . '">Edytuj</a> ';
-            if ($row->billing_type === 'fixed') {
-                echo '<a class="button" href="' . esc_url(wp_nonce_url(admin_url('admin-post.php?action=crm_omd_duplicate_fixed_entry&id=' . (int) $row->id), 'crm_omd_duplicate_fixed_entry_' . (int) $row->id)) . '">Duplikuj ryczałt</a> ';
-            }
             echo '<a class="button button-secondary" href="' . esc_url(wp_nonce_url(admin_url('admin-post.php?action=crm_omd_delete_entry&id=' . (int) $row->id), 'crm_omd_delete_entry_' . (int) $row->id)) . '" onclick="return confirm(\'Na pewno usunąć wpis?\');">Usuń</a>';
             echo '</td>';
             echo '</tr>';
@@ -682,7 +535,7 @@ class CRM_OMD_Time_Manager
         $status = isset($_POST['status']) ? sanitize_text_field(wp_unslash($_POST['status'])) : 'pending';
         $description = isset($_POST['description']) ? sanitize_textarea_field(wp_unslash($_POST['description'])) : '';
 
-        if (!$user_id || !$client_id || !$project_id || !$service_id || !$work_date || !in_array($status, ['pending', 'approved', 'rejected'], true)) {
+        if (!$id || !$user_id || !$client_id || !$project_id || !$service_id || !$work_date || !in_array($status, ['pending', 'approved', 'rejected'], true)) {
             wp_die(esc_html__('Niepoprawne dane formularza.', 'crm-omd-time-manager'));
         }
 
@@ -690,79 +543,25 @@ class CRM_OMD_Time_Manager
         if ($value === null) {
             wp_die(esc_html__('Usługa nie należy do wskazanego klienta.', 'crm-omd-time-manager'));
         }
-
         global $wpdb;
-        $data = [
-            'user_id' => $user_id,
-            'client_id' => $client_id,
-            'project_id' => $project_id,
-            'service_id' => $service_id,
-            'work_date' => $work_date,
-            'hours' => $hours,
-            'description' => $description,
-            'status' => $status,
-            'calculated_value' => $value,
-            'reviewed_by' => $status === 'pending' ? null : get_current_user_id(),
-            'reviewed_at' => $status === 'pending' ? null : current_time('mysql'),
-        ];
-
-        if ($id > 0) {
-            $wpdb->update(
-                $this->tbl_entries,
-                $data,
-                ['id' => $id],
-                ['%d', '%d', '%d', '%d', '%s', '%f', '%s', '%s', '%f', '%d', '%s'],
-                ['%d']
-            );
-        } else {
-            $data['created_at'] = current_time('mysql');
-            $wpdb->insert(
-                $this->tbl_entries,
-                $data,
-                ['%d', '%d', '%d', '%d', '%s', '%f', '%s', '%s', '%f', '%d', '%s', '%s']
-            );
-        }
-
-        wp_safe_redirect(admin_url('admin.php?page=crm-omd-time'));
-        exit;
-    }
-
-    public function handle_duplicate_fixed_entry(): void
-    {
-        $this->require_admin_access();
-        $id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
-        check_admin_referer('crm_omd_duplicate_fixed_entry_' . $id);
-
-        if ($id <= 0) {
-            wp_die(esc_html__('Niepoprawny wpis.', 'crm-omd-time-manager'));
-        }
-
-        global $wpdb;
-        $entry = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$this->tbl_entries} WHERE id = %d", $id));
-        if (!$entry) {
-            wp_die(esc_html__('Nie znaleziono wpisu.', 'crm-omd-time-manager'));
-        }
-
-        $service = $wpdb->get_row($wpdb->prepare("SELECT billing_type FROM {$this->tbl_services} WHERE id = %d", (int) $entry->service_id));
-        if (!$service || $service->billing_type !== 'fixed') {
-            wp_die(esc_html__('Duplikowanie dostępne tylko dla wpisów ryczałtowych.', 'crm-omd-time-manager'));
-        }
-
-        $wpdb->insert(
+        $wpdb->update(
             $this->tbl_entries,
             [
-                'user_id' => (int) $entry->user_id,
-                'client_id' => (int) $entry->client_id,
-                'project_id' => (int) $entry->project_id,
-                'service_id' => (int) $entry->service_id,
-                'work_date' => current_time('Y-m-d'),
-                'hours' => (float) $entry->hours,
-                'description' => (string) $entry->description,
-                'status' => 'pending',
-                'calculated_value' => (float) $entry->calculated_value,
-                'created_at' => current_time('mysql'),
+                'user_id' => $user_id,
+                'client_id' => $client_id,
+                'project_id' => $project_id,
+                'service_id' => $service_id,
+                'work_date' => $work_date,
+                'hours' => $hours,
+                'description' => $description,
+                'status' => $status,
+                'calculated_value' => $value,
+                'reviewed_by' => $status === 'pending' ? null : get_current_user_id(),
+                'reviewed_at' => $status === 'pending' ? null : current_time('mysql'),
             ],
-            ['%d', '%d', '%d', '%d', '%s', '%f', '%s', '%s', '%f', '%s']
+            ['id' => $id],
+            ['%d', '%d', '%d', '%d', '%s', '%f', '%s', '%s', '%f', '%d', '%s'],
+            ['%d']
         );
 
         wp_safe_redirect(admin_url('admin.php?page=crm-omd-time'));
