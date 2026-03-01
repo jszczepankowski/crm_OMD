@@ -2,7 +2,7 @@
 /**
  * Plugin Name: CRM OMD Time Manager
  * Description: Rejestracja czasu pracy pracowników dla klientów i projektów, akceptacja wpisów, raporty miesięczne i eksport CSV.
- * Version: 0.2.0
+ * Version: 0.3.0
  * Author: OMD
  * Text Domain: crm-omd-time-manager
  */
@@ -44,11 +44,16 @@ class CRM_OMD_Time_Manager
 
         add_action('admin_post_crm_omd_export_report', [$this, 'handle_export_report']);
         add_action('admin_post_crm_omd_save_worker_settings', [$this, 'handle_save_worker_settings']);
+        add_action('admin_post_crm_omd_save_reminder_settings', [$this, 'handle_save_reminder_settings']);
+        add_action('admin_post_crm_omd_update_worker', [$this, 'handle_update_worker']);
+        add_action('admin_post_crm_omd_delete_worker', [$this, 'handle_delete_worker']);
 
         add_shortcode('crm_omd_time_tracker', [$this, 'render_tracker_shortcode']);
+        add_shortcode('crm_omd_employee_login', [$this, 'render_employee_login_shortcode']);
         add_action('admin_post_crm_omd_submit_entry', [$this, 'handle_submit_entry']);
 
         add_action('crm_omd_daily_reminder', [$this, 'send_daily_reminders']);
+        add_action('wp_login', [$this, 'track_user_login'], 10, 2);
     }
 
     public function activate(): void
@@ -60,6 +65,9 @@ class CRM_OMD_Time_Manager
         dbDelta("CREATE TABLE {$this->tbl_clients} (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             name VARCHAR(191) NOT NULL,
+            nip VARCHAR(20) NULL,
+            contact_name VARCHAR(191) NULL,
+            contact_email VARCHAR(191) NULL,
             is_active TINYINT(1) NOT NULL DEFAULT 1,
             created_at DATETIME NOT NULL,
             PRIMARY KEY  (id)
@@ -115,6 +123,10 @@ class CRM_OMD_Time_Manager
         if (!wp_next_scheduled('crm_omd_daily_reminder')) {
             wp_schedule_event(time() + HOUR_IN_SECONDS, 'daily', 'crm_omd_daily_reminder');
         }
+
+        add_option('crm_omd_reminder_mode', 'interval');
+        add_option('crm_omd_reminder_interval_days', 5);
+        add_option('crm_omd_reminder_day_of_month', 5);
     }
 
     public function deactivate(): void
@@ -141,6 +153,46 @@ class CRM_OMD_Time_Manager
         }
 
         return $service->billing_type === 'fixed' ? (float) $service->fixed_value : $hours * (float) $service->hourly_rate;
+    }
+
+    public function track_user_login(string $user_login, WP_User $user): void
+    {
+        update_user_meta($user->ID, 'crm_omd_last_login', current_time('mysql'));
+    }
+
+    public function render_employee_login_shortcode(array $atts = []): string
+    {
+        if (is_user_logged_in()) {
+            return '<p>Jesteś już zalogowany.</p>';
+        }
+
+        $atts = shortcode_atts([
+            'logo_url' => '',
+            'title' => 'Panel logowania pracownika',
+        ], $atts, 'crm_omd_employee_login');
+
+        $redirect_to = home_url('/');
+        $args = [
+            'echo' => false,
+            'redirect' => $redirect_to,
+            'remember' => true,
+            'label_username' => 'Login lub e-mail',
+            'label_password' => 'Hasło',
+            'label_log_in' => 'Zaloguj',
+            'form_id' => 'crm-omd-employee-login-form',
+        ];
+
+        ob_start();
+        echo '<div class="crm-omd-login-panel" style="max-width:460px;margin:24px auto;padding:24px;border:1px solid #ddd;border-radius:8px;background:#fff;">';
+        if (!empty($atts['logo_url'])) {
+            echo '<div style="text-align:center;margin-bottom:16px;"><img src="' . esc_url($atts['logo_url']) . '" alt="Logo" style="max-height:80px;width:auto;"></div>';
+        } else {
+            echo '<div style="text-align:center;margin-bottom:16px;padding:16px;border:1px dashed #ccc;color:#666;">Miejsce na branding / logo</div>';
+        }
+        echo '<h3 style="margin-top:0;text-align:center;">' . esc_html($atts['title']) . '</h3>';
+        echo wp_login_form($args);
+        echo '</div>';
+        return (string) ob_get_clean();
     }
 
     public function register_admin_menu(): void
@@ -533,7 +585,7 @@ class CRM_OMD_Time_Manager
     {
         $this->require_admin_access();
         global $wpdb;
-        $rows = $wpdb->get_results("SELECT id, name, is_active FROM {$this->tbl_clients} ORDER BY name ASC");
+        $rows = $wpdb->get_results("SELECT id, name, nip, contact_name, contact_email, is_active FROM {$this->tbl_clients} ORDER BY name ASC");
         $edit_id = isset($_GET['edit_client']) ? (int) $_GET['edit_client'] : 0;
         $edit = $edit_id ? $wpdb->get_row($wpdb->prepare("SELECT * FROM {$this->tbl_clients} WHERE id = %d", $edit_id)) : null;
 
@@ -543,6 +595,9 @@ class CRM_OMD_Time_Manager
         echo '<input type="hidden" name="action" value="crm_omd_save_client">';
         echo '<input type="hidden" name="id" value="' . ($edit ? (int) $edit->id : 0) . '">';
         echo '<input type="text" name="name" placeholder="Nazwa klienta" value="' . ($edit ? esc_attr($edit->name) : '') . '" required> ';
+        echo '<input type="text" name="nip" placeholder="NIP" value="' . ($edit ? esc_attr((string) $edit->nip) : '') . '"> ';
+        echo '<input type="text" name="contact_name" placeholder="Osoba kontaktowa" value="' . ($edit ? esc_attr((string) $edit->contact_name) : '') . '"> ';
+        echo '<input type="email" name="contact_email" placeholder="Email kontaktowy" value="' . ($edit ? esc_attr((string) $edit->contact_email) : '') . '"> ';
         echo '<label><input type="checkbox" name="is_active" value="1" ' . checked($edit ? (int) $edit->is_active : 1, 1, false) . '> Aktywny</label> ';
         echo '<button class="button button-primary" type="submit">' . ($edit ? 'Zapisz zmiany' : 'Zapisz') . '</button> ';
         if ($edit) {
@@ -550,9 +605,9 @@ class CRM_OMD_Time_Manager
         }
         echo '</form>';
 
-        echo '<h2>Lista klientów</h2><table class="widefat striped"><thead><tr><th>Nazwa</th><th>Status</th><th>Akcje</th></tr></thead><tbody>';
+        echo '<h2>Lista klientów</h2><table class="widefat striped"><thead><tr><th>Nazwa</th><th>NIP</th><th>Osoba kontaktowa</th><th>Email</th><th>Status</th><th>Akcje</th></tr></thead><tbody>';
         foreach ($rows as $row) {
-            echo '<tr><td>' . esc_html($row->name) . '</td><td>' . ((int) $row->is_active ? 'Aktywny' : 'Nieaktywny') . '</td><td>';
+            echo '<tr><td>' . esc_html($row->name) . '</td><td>' . esc_html((string) $row->nip) . '</td><td>' . esc_html((string) $row->contact_name) . '</td><td>' . esc_html((string) $row->contact_email) . '</td><td>' . ((int) $row->is_active ? 'Aktywny' : 'Nieaktywny') . '</td><td>';
             echo '<a class="button" href="' . esc_url(add_query_arg(['page' => 'crm-omd-clients', 'edit_client' => (int) $row->id], admin_url('admin.php'))) . '">Edytuj</a> ';
             echo '<a class="button button-secondary" href="' . esc_url(wp_nonce_url(admin_url('admin-post.php?action=crm_omd_delete_client&id=' . (int) $row->id), 'crm_omd_delete_client_' . (int) $row->id)) . '">Dezaktywuj</a></td></tr>';
         }
@@ -566,6 +621,9 @@ class CRM_OMD_Time_Manager
 
         $id = isset($_POST['id']) ? (int) $_POST['id'] : 0;
         $name = isset($_POST['name']) ? sanitize_text_field(wp_unslash($_POST['name'])) : '';
+        $nip = isset($_POST['nip']) ? sanitize_text_field(wp_unslash($_POST['nip'])) : '';
+        $contact_name = isset($_POST['contact_name']) ? sanitize_text_field(wp_unslash($_POST['contact_name'])) : '';
+        $contact_email = isset($_POST['contact_email']) ? sanitize_email(wp_unslash($_POST['contact_email'])) : '';
         $is_active = isset($_POST['is_active']) ? 1 : 0;
         if ($name === '') {
             wp_die(esc_html__('Nazwa jest wymagana.', 'crm-omd-time-manager'));
@@ -573,9 +631,9 @@ class CRM_OMD_Time_Manager
 
         global $wpdb;
         if ($id > 0) {
-            $wpdb->update($this->tbl_clients, ['name' => $name, 'is_active' => $is_active], ['id' => $id], ['%s', '%d'], ['%d']);
+            $wpdb->update($this->tbl_clients, ['name' => $name, 'nip' => $nip, 'contact_name' => $contact_name, 'contact_email' => $contact_email, 'is_active' => $is_active], ['id' => $id], ['%s', '%s', '%s', '%s', '%d'], ['%d']);
         } else {
-            $wpdb->insert($this->tbl_clients, ['name' => $name, 'is_active' => 1, 'created_at' => current_time('mysql')], ['%s', '%d', '%s']);
+            $wpdb->insert($this->tbl_clients, ['name' => $name, 'nip' => $nip, 'contact_name' => $contact_name, 'contact_email' => $contact_email, 'is_active' => 1, 'created_at' => current_time('mysql')], ['%s', '%s', '%s', '%s', '%d', '%s']);
         }
 
         wp_safe_redirect(admin_url('admin.php?page=crm-omd-clients'));
@@ -760,16 +818,56 @@ class CRM_OMD_Time_Manager
         $this->require_admin_access();
         $users = get_users(['orderby' => 'display_name', 'order' => 'ASC']);
 
+        $edit_worker_id = isset($_GET['edit_worker']) ? (int) $_GET['edit_worker'] : 0;
+        $edit_worker = $edit_worker_id > 0 ? get_user_by('id', $edit_worker_id) : false;
+
         echo '<div class="wrap"><h1>Pracownicy</h1>';
         echo '<p>Zarządzanie dostępem użytkowników do rejestracji godzin i przypomnień mailowych.</p>';
+
+        $reminder_mode = (string) get_option('crm_omd_reminder_mode', 'interval');
+        $reminder_interval_days = max(1, (int) get_option('crm_omd_reminder_interval_days', 5));
+        $reminder_day_of_month = min(28, max(1, (int) get_option('crm_omd_reminder_day_of_month', 5)));
+
+        echo '<h2>Ustawienia przypomnień</h2>';
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="background:#fff;border:1px solid #ddd;padding:12px;margin-bottom:14px;">';
+        wp_nonce_field('crm_omd_save_reminder_settings');
+        echo '<input type="hidden" name="action" value="crm_omd_save_reminder_settings">';
+        echo '<p><label>Tryb przypomnienia<br><select name="reminder_mode">';
+        echo '<option value="interval"' . selected($reminder_mode, 'interval', false) . '>Co X dni</option>';
+        echo '<option value="monthly"' . selected($reminder_mode, 'monthly', false) . '>Konkretny dzień miesiąca</option>';
+        echo '</select></label></p>';
+        echo '<p><label>Interwał dni (dla trybu "Co X dni")<br><input type="number" name="reminder_interval_days" min="1" max="60" value="' . esc_attr((string) $reminder_interval_days) . '"></label></p>';
+        echo '<p><label>Dzień miesiąca (dla trybu miesięcznego, 1-28)<br><input type="number" name="reminder_day_of_month" min="1" max="28" value="' . esc_attr((string) $reminder_day_of_month) . '"></label></p>';
+        echo '<p><button class="button button-primary" type="submit">Zapisz ustawienia przypomnień</button></p>';
+        echo '</form>';
+
+        if ($edit_worker instanceof WP_User) {
+            echo '<h2>Edycja konta: ' . esc_html($edit_worker->display_name) . '</h2>';
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="background:#fff;border:1px solid #ddd;padding:12px;margin-bottom:14px;">';
+            wp_nonce_field('crm_omd_update_worker_' . (int) $edit_worker->ID);
+            echo '<input type="hidden" name="action" value="crm_omd_update_worker">';
+            echo '<input type="hidden" name="user_id" value="' . (int) $edit_worker->ID . '">';
+            echo '<p><label>Nowe hasło (opcjonalnie)<br><input type="password" name="new_password" autocomplete="new-password"></label></p>';
+            echo '<p><label>Rola<br><select name="role">';
+            foreach (array_keys(get_editable_roles()) as $role_key) {
+                echo '<option value="' . esc_attr($role_key) . '"' . selected(in_array($role_key, $edit_worker->roles, true), true, false) . '>' . esc_html($role_key) . '</option>';
+            }
+            echo '</select></label></p>';
+            echo '<p><button class="button button-primary" type="submit">Zapisz konto</button> ';
+            echo '<a class="button button-secondary" href="' . esc_url(wp_nonce_url(admin_url('admin-post.php?action=crm_omd_delete_worker&user_id=' . (int) $edit_worker->ID), 'crm_omd_delete_worker_' . (int) $edit_worker->ID)) . '" onclick="return confirm(\'Usunąć konto pracownika?\');">Usuń konto</a> ';
+            echo '<a class="button" href="' . esc_url(admin_url('admin.php?page=crm-omd-workers')) . '">Anuluj</a></p>';
+            echo '</form>';
+        }
+
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         wp_nonce_field('crm_omd_save_worker_settings');
         echo '<input type="hidden" name="action" value="crm_omd_save_worker_settings">';
+        echo '<table class="widefat striped"><thead><tr><th>Użytkownik</th><th>Email</th><th>Rola</th><th>Ostatnie logowanie</th><th>Aktywny w time tracking</th><th>Przypomnienia mailowe</th><th>Akcje</th></tr></thead><tbody>';
 
-        echo '<table class="widefat striped"><thead><tr><th>Użytkownik</th><th>Email</th><th>Rola</th><th>Aktywny w time tracking</th><th>Przypomnienia mailowe</th></tr></thead><tbody>';
         foreach ($users as $user) {
             $enabled = get_user_meta($user->ID, 'crm_omd_worker_enabled', true);
             $reminder = get_user_meta($user->ID, 'crm_omd_worker_reminder', true);
+            $last_login = get_user_meta($user->ID, 'crm_omd_last_login', true);
             if ($enabled === '') {
                 $enabled = '1';
             }
@@ -781,8 +879,10 @@ class CRM_OMD_Time_Manager
             echo '<td>' . esc_html($user->display_name) . '</td>';
             echo '<td>' . esc_html($user->user_email) . '</td>';
             echo '<td>' . esc_html(implode(', ', $user->roles)) . '</td>';
+            echo '<td>' . esc_html($last_login ? $last_login : 'brak') . '</td>';
             echo '<td><label><input type="checkbox" name="worker_enabled[' . (int) $user->ID . ']" value="1" ' . checked($enabled, '1', false) . '> Tak</label></td>';
             echo '<td><label><input type="checkbox" name="worker_reminder[' . (int) $user->ID . ']" value="1" ' . checked($reminder, '1', false) . '> Tak</label></td>';
+            echo '<td><a class="button button-small" href="' . esc_url(add_query_arg(['page' => 'crm-omd-workers', 'edit_worker' => (int) $user->ID], admin_url('admin.php'))) . '">Edytuj konto</a></td>';
             echo '</tr>';
         }
         echo '</tbody></table>';
@@ -810,12 +910,85 @@ class CRM_OMD_Time_Manager
         exit;
     }
 
+    public function handle_save_reminder_settings(): void
+    {
+        $this->require_admin_access();
+        check_admin_referer('crm_omd_save_reminder_settings');
+
+        $mode = isset($_POST['reminder_mode']) ? sanitize_text_field(wp_unslash($_POST['reminder_mode'])) : 'interval';
+        if (!in_array($mode, ['interval', 'monthly'], true)) {
+            $mode = 'interval';
+        }
+
+        $interval = isset($_POST['reminder_interval_days']) ? (int) $_POST['reminder_interval_days'] : 5;
+        $interval = max(1, min(60, $interval));
+
+        $day_of_month = isset($_POST['reminder_day_of_month']) ? (int) $_POST['reminder_day_of_month'] : 5;
+        $day_of_month = min(28, max(1, $day_of_month));
+
+        update_option('crm_omd_reminder_mode', $mode);
+        update_option('crm_omd_reminder_interval_days', $interval);
+        update_option('crm_omd_reminder_day_of_month', $day_of_month);
+
+        wp_safe_redirect(admin_url('admin.php?page=crm-omd-workers'));
+        exit;
+    }
+
+    public function handle_update_worker(): void
+    {
+        $this->require_admin_access();
+        $user_id = isset($_POST['user_id']) ? (int) $_POST['user_id'] : 0;
+        check_admin_referer('crm_omd_update_worker_' . $user_id);
+
+        if ($user_id <= 0) {
+            wp_die(esc_html__('Niepoprawny użytkownik.', 'crm-omd-time-manager'));
+        }
+
+        $user = get_user_by('id', $user_id);
+        if (!$user) {
+            wp_die(esc_html__('Użytkownik nie istnieje.', 'crm-omd-time-manager'));
+        }
+
+        $role = isset($_POST['role']) ? sanitize_text_field(wp_unslash($_POST['role'])) : '';
+        $new_password = isset($_POST['new_password']) ? (string) wp_unslash($_POST['new_password']) : '';
+
+        if ($role !== '' && array_key_exists($role, get_editable_roles())) {
+            $user->set_role($role);
+        }
+
+        if ($new_password !== '') {
+            wp_set_password($new_password, $user_id);
+        }
+
+        wp_safe_redirect(admin_url('admin.php?page=crm-omd-workers'));
+        exit;
+    }
+
+    public function handle_delete_worker(): void
+    {
+        $this->require_admin_access();
+        $user_id = isset($_GET['user_id']) ? (int) $_GET['user_id'] : 0;
+        check_admin_referer('crm_omd_delete_worker_' . $user_id);
+
+        if ($user_id <= 0 || $user_id === get_current_user_id()) {
+            wp_die(esc_html__('Nie można usunąć tego konta.', 'crm-omd-time-manager'));
+        }
+
+        require_once ABSPATH . 'wp-admin/includes/user.php';
+        wp_delete_user($user_id);
+
+        wp_safe_redirect(admin_url('admin.php?page=crm-omd-workers'));
+        exit;
+    }
+
     public function render_reports_page(): void
     {
         $this->require_admin_access();
         global $wpdb;
 
         $month = isset($_GET['month']) ? sanitize_text_field(wp_unslash($_GET['month'])) : date('Y-m');
+        $date_from = isset($_GET['date_from']) ? sanitize_text_field(wp_unslash($_GET['date_from'])) : ($month . '-01');
+        $date_to = isset($_GET['date_to']) ? sanitize_text_field(wp_unslash($_GET['date_to'])) : date('Y-m-t', strtotime($month . '-01'));
         $client_id = isset($_GET['client_id']) ? (int) $_GET['client_id'] : 0;
         $project_id = isset($_GET['project_id']) ? (int) $_GET['project_id'] : 0;
         $detail = isset($_GET['detail']) ? 1 : 0;
@@ -823,8 +996,8 @@ class CRM_OMD_Time_Manager
         $clients = $wpdb->get_results("SELECT id, name FROM {$this->tbl_clients} WHERE is_active = 1 ORDER BY name ASC");
         $projects = $wpdb->get_results("SELECT id, name FROM {$this->tbl_projects} WHERE is_active = 1 ORDER BY name ASC");
 
-        $where = "WHERE e.status = 'approved' AND DATE_FORMAT(e.work_date, '%Y-%m') = %s";
-        $params = [$month];
+        $where = "WHERE e.status = 'approved' AND e.work_date BETWEEN %s AND %s";
+        $params = [$date_from, $date_to];
         if ($client_id) {
             $where .= ' AND e.client_id = %d';
             $params[] = $client_id;
@@ -857,6 +1030,8 @@ class CRM_OMD_Time_Manager
         echo '<div class="wrap"><h1>Raporty</h1>';
         echo '<form method="get"><input type="hidden" name="page" value="crm-omd-reports">';
         echo '<input type="month" name="month" value="' . esc_attr($month) . '"> ';
+        echo '<input type="date" name="date_from" value="' . esc_attr($date_from) . '"> ';
+        echo '<input type="date" name="date_to" value="' . esc_attr($date_to) . '"> ';
         echo '<select name="client_id"><option value="0">Wszyscy klienci</option>';
         foreach ($clients as $client) {
             echo '<option value="' . (int) $client->id . '"' . selected($client_id, (int) $client->id, false) . '>' . esc_html($client->name) . '</option>';
@@ -875,6 +1050,8 @@ class CRM_OMD_Time_Manager
         wp_nonce_field('crm_omd_export_report');
         echo '<input type="hidden" name="action" value="crm_omd_export_report">';
         echo '<input type="hidden" name="month" value="' . esc_attr($month) . '">';
+        echo '<input type="hidden" name="date_from" value="' . esc_attr($date_from) . '">';
+        echo '<input type="hidden" name="date_to" value="' . esc_attr($date_to) . '">';
         echo '<input type="hidden" name="client_id" value="' . (int) $client_id . '">';
         echo '<input type="hidden" name="project_id" value="' . (int) $project_id . '">';
         echo '<input type="hidden" name="detail" value="' . (int) $detail . '">';
@@ -920,12 +1097,14 @@ class CRM_OMD_Time_Manager
 
         global $wpdb;
         $month = isset($_POST['month']) ? sanitize_text_field(wp_unslash($_POST['month'])) : date('Y-m');
+        $date_from = isset($_POST['date_from']) ? sanitize_text_field(wp_unslash($_POST['date_from'])) : ($month . '-01');
+        $date_to = isset($_POST['date_to']) ? sanitize_text_field(wp_unslash($_POST['date_to'])) : date('Y-m-t', strtotime($month . '-01'));
         $client_id = isset($_POST['client_id']) ? (int) $_POST['client_id'] : 0;
         $project_id = isset($_POST['project_id']) ? (int) $_POST['project_id'] : 0;
         $detail = isset($_POST['detail']) ? (int) $_POST['detail'] : 0;
 
-        $where = "WHERE e.status = 'approved' AND DATE_FORMAT(e.work_date, '%Y-%m') = %s";
-        $params = [$month];
+        $where = "WHERE e.status = 'approved' AND e.work_date BETWEEN %s AND %s";
+        $params = [$date_from, $date_to];
         if ($client_id) {
             $where .= ' AND e.client_id = %d';
             $params[] = $client_id;
@@ -975,9 +1154,28 @@ class CRM_OMD_Time_Manager
 
     public function send_daily_reminders(): void
     {
+        $today = current_time('Y-m-d');
+        $mode = (string) get_option('crm_omd_reminder_mode', 'interval');
+        $interval_days = max(1, (int) get_option('crm_omd_reminder_interval_days', 5));
+        $day_of_month = min(28, max(1, (int) get_option('crm_omd_reminder_day_of_month', 5)));
+
+        if ($mode === 'monthly') {
+            if ((int) current_time('j') !== $day_of_month) {
+                return;
+            }
+        } else {
+            $last_sent = (string) get_option('crm_omd_last_global_reminder_sent', '');
+            if ($last_sent !== '') {
+                $last_ts = strtotime($last_sent);
+                $today_ts = strtotime($today);
+                if ($last_ts && $today_ts && ($today_ts - $last_ts) < ($interval_days * DAY_IN_SECONDS)) {
+                    return;
+                }
+            }
+        }
+
         global $wpdb;
         $users = get_users(['role__in' => ['subscriber', 'author', 'editor', 'administrator']]);
-        $today = current_time('Y-m-d');
 
         foreach ($users as $user) {
             $enabled = get_user_meta($user->ID, 'crm_omd_worker_enabled', true);
@@ -995,6 +1193,8 @@ class CRM_OMD_Time_Manager
                 );
             }
         }
+
+        update_option('crm_omd_last_global_reminder_sent', $today);
     }
 }
 
