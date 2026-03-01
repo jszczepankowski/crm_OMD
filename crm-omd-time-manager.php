@@ -272,7 +272,6 @@ class CRM_OMD_Time_Manager
         return (float) $sum;
     }
 
-
     public function render_employee_monthly_view_shortcode($atts = [], $content = null, string $shortcode_tag = ''): string
     {
         if (!is_user_logged_in()) {
@@ -1223,17 +1222,9 @@ class CRM_OMD_Time_Manager
 
         echo '<table class="widefat striped" style="margin-top:8px;">';
         echo '<thead><tr><th>Pracownik</th><th>Zaraportowane godziny</th><th>Godziny do przepracowania</th><th>Różnica godzin</th><th>Wypracowany zysk (PLN)</th><th>Koszt etatu / pensja (PLN)</th><th>Stopa zwrotu (zysk - pensja)</th></tr></thead><tbody>';
-        global $wpdb;
         foreach ($users as $user) {
             $reported = $this->get_user_reported_hours_for_range((int) $user->ID, $admin_date_from, $admin_date_to);
-            $revenue = (float) $wpdb->get_var(
-                $wpdb->prepare(
-                    "SELECT COALESCE(SUM(calculated_value), 0) FROM {$this->tbl_entries} WHERE user_id = %d AND work_date BETWEEN %s AND %s",
-                    (int) $user->ID,
-                    $admin_date_from,
-                    $admin_date_to
-                )
-            );
+            $revenue = $this->get_user_revenue_for_range((int) $user->ID, $admin_date_from, $admin_date_to);
             $salary = (float) get_user_meta($user->ID, 'crm_omd_worker_monthly_salary', true);
             $return = $revenue - $salary;
             echo '<tr>';
